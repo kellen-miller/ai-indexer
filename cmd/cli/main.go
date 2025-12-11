@@ -1,12 +1,11 @@
 package main
 
 import (
+	"ai-index/internal/indexer"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"ai-index/internal/indexer"
 )
 
 func main() {

@@ -1,0 +1,28 @@
+version: '3'
+
+tasks:
+  check:
+    cmds:
+      - task: fmt
+      - task: lint
+      - task: test
+
+  fmt:
+    cmds:
+      - 'golangci-lint fmt --config "$HOME/.config/finxact/microservice-ci-lib/go-lint/.golangci.yaml"'
+
+  lint:
+    cmds:
+      - 'golangci-lint run --fix --config "$HOME/.config/finxact/microservice-ci-lib/go-lint/.golangci.yaml"'
+
+  test:
+    cmds:
+      - "go test -v -race ./..."
+
+  build:
+    cmds:
+      - "go build -o build/indexer ./cmd/cli"
+
+  dry-run:
+    cmds:
+      - "go run ./cmd/cli --dry-run ../."
