@@ -52,6 +52,8 @@ type RepoResult struct {
 	SkipReason     string `json:"skip_reason,omitempty"`
 	IndexedCommit  string `json:"indexed_commit,omitempty"`
 	CachedCommit   string `json:"cached_commit,omitempty"`
+	DiffBaseCommit string `json:"diff_base_commit,omitempty"`
+	DiffFileCount  int    `json:"diff_file_count,omitempty"`
 	CodexRan       bool   `json:"codex_ran"`
 	DryRun         bool   `json:"dry_run"`
 }

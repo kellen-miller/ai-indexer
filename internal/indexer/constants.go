@@ -22,6 +22,11 @@ Assumptions and environment:
   to explore the repo.
 - The environment variable COLLECTION_SLUG is set and must be used as the
   Chroma collection name for this repository.
+- If the environment variable INDEX_BASE_COMMIT is set, only re-index the
+  files that changed between that commit and HEAD. A newline-delimited list
+  of impacted files may also be provided via INDEX_DIFF_FILES for convenience.
+  Focus your exploration on those files/directories and update only the
+  affected module summaries in Chroma.
 
 Repository understanding:
 1) Identify the repo name, primary languages, and any obvious framework or

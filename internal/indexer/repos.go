@@ -57,7 +57,22 @@ func (ix *indexer) processRepo(ctx context.Context, repoDir, rootDir string, dry
 		return result
 	}
 
-	ran, exitCode, codexErr := ix.runCodex(ctx, repoDir, slug, dryRun)
+	var diffFiles []string
+	if result.CachedCommit != "" {
+		result.DiffBaseCommit = result.CachedCommit
+		files, err := diffFilesSince(ctx, repoDir, result.CachedCommit)
+		if err != nil {
+			ix.repoWarnf("could not compute diff vs %s: %v — falling back to full indexing",
+				shortCommit(result.CachedCommit), err)
+		} else {
+			diffFiles = files
+			result.DiffFileCount = len(files)
+			ix.repoInfof("incremental indexing: %d files changed since %s",
+				len(files), shortCommit(result.CachedCommit))
+		}
+	}
+
+	ran, exitCode, codexErr := ix.runCodex(ctx, repoDir, slug, result.CachedCommit, diffFiles, dryRun)
 	result.CodexRan = ran
 	if exitCode != nil {
 		result.CodexExitCode = exitCode
@@ -141,24 +156,34 @@ func (ix *indexer) checkoutAndPull(ctx context.Context, repoDir, branch string) 
 	return true, true
 }
 
-func (ix *indexer) runCodex(ctx context.Context, repoDir, slug string, dryRun bool) (bool, *int, error) {
+func (ix *indexer) runCodex(ctx context.Context, repoDir, slug, baseCommit string, diffFiles []string, dryRun bool) (bool, *int, error) {
 	cmd := exec.CommandContext(ctx, "codex", "exec",
 		"--cd", repoDir,
 		"--sandbox", "danger-full-access",
+		"--dangerously-bypass-approvals-and-sandbox",
 		codexPrompt)
 	// Force Codex to read EOF immediately so it doesn't wait for user input
 	// after the first turn, which previously left the indexer hanging.
 	cmd.Stdin = strings.NewReader("")
 	env := os.Environ()
 	env = append(env, "COLLECTION_SLUG="+slug)
+	if baseCommit != "" {
+		env = append(env, "INDEX_BASE_COMMIT="+baseCommit)
+	}
+	if len(diffFiles) > 0 {
+		env = append(env, "INDEX_DIFF_FILES="+strings.Join(diffFiles, "\n"))
+	}
 	cmd.Env = env
 	cmd.Stdout = ix.stdout
 	cmd.Stderr = ix.stderr
 
 	if dryRun {
-		ix.repoInfof("[dry-run] COLLECTION_SLUG=%q codex exec --cd %q --sandbox danger-full-access '<PROMPT>'",
-			slug,
-			repoDir)
+		desc := fmt.Sprintf("[dry-run] COLLECTION_SLUG=%q codex exec --cd %q --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox '<PROMPT>'",
+			slug, repoDir)
+		if baseCommit != "" {
+			desc += fmt.Sprintf(" (incremental from %s)", shortCommit(baseCommit))
+		}
+		ix.repoInfof("%s", desc)
 		return false, nil, nil
 	}
 
@@ -252,4 +277,27 @@ func shortCommit(commit string) string {
 		return commit[:shortCommitLen]
 	}
 	return commit
+}
+
+func diffFilesSince(ctx context.Context, repoDir, baseCommit string) ([]string, error) {
+	if baseCommit == "" {
+		return nil, errors.New("base commit is required to compute a diff")
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "-C", repoDir, "diff", "--name-only", baseCommit, "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git diff --name-only %s HEAD: %w", baseCommit, err)
+	}
+
+	lines := strings.Split(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n")
+	files := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		files = append(files, line)
+	}
+	return files, nil
 }
