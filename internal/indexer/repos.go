@@ -11,6 +11,8 @@ import (
 	"strings"
 )
 
+const shortCommitLen = 7
+
 func findGitRepos(root string) ([]string, error) {
 	var repos []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -30,61 +32,44 @@ func (ix *indexer) processRepo(ctx context.Context, repoDir, rootDir string, dry
 	slug := computeCollectionSlug(rootDir, repoDir)
 	ix.repoHeader(repoDir, slug)
 
-	var (
-		defaultBranch string
-		checkoutOK    *bool
-		pullOK        *bool
-		codexRan      bool
-		codexExit     *int
-		errMsg        string
-	)
-
-	db, err := detectDefaultBranch(ctx, repoDir)
-	if err != nil {
-		ix.repoWarnf("could not detect default branch: %v", err)
-	} else if db == "" {
-		ix.repoWarnf("could not detect default branch — skipping checkout/pull")
-	} else {
-		defaultBranch = db
-		ix.repoInfof("default branch: %s", defaultBranch)
+	result := RepoResult{
+		Path:           repoDir,
+		CollectionSlug: slug,
+		DryRun:         dryRun,
 	}
 
-	if defaultBranch != "" {
-		if dryRun {
-			ix.repoInfof("[dry-run] git -C %q checkout %s", repoDir, defaultBranch)
-			ix.repoInfof("[dry-run] git -C %q pull --ff-only", repoDir)
-		} else {
-			cOK, pOK := ix.checkoutAndPull(ctx, repoDir, defaultBranch)
-			checkoutOK = &cOK
-			pullOK = &pOK
-		}
+	defaultBranch := ix.reportDefaultBranch(ctx, repoDir)
+	result.DefaultBranch = defaultBranch
+
+	result.CheckoutOK, result.PullOK = ix.maybeSynchronizeRepo(ctx, repoDir, defaultBranch, dryRun)
+
+	indexBranch := ix.selectIndexBranch(ctx, repoDir, defaultBranch)
+	if indexBranch != "" && result.DefaultBranch == "" {
+		result.DefaultBranch = indexBranch
+	}
+
+	result.IndexedCommit = ix.detectIndexedCommit(ctx, repoDir)
+	result.SkipReason, result.CachedCommit = ix.evaluateSkip(slug, indexBranch, result.IndexedCommit)
+
+	if result.SkipReason != "" {
+		ix.repoInfof("skipping indexing: %s", result.SkipReason)
+		ix.outln("")
+		return result
 	}
 
 	ran, exitCode, codexErr := ix.runCodex(ctx, repoDir, slug, dryRun)
-	codexRan = ran
+	result.CodexRan = ran
 	if exitCode != nil {
-		codexExit = exitCode
+		result.CodexExitCode = exitCode
 	}
 	if codexErr != nil {
-		if errMsg != "" {
-			errMsg += "; "
-		}
-		errMsg += codexErr.Error()
+		result.Error = codexErr.Error()
+	} else if !dryRun && ix.cache != nil && indexBranch != "" && result.IndexedCommit != "" {
+		ix.cache.Update(slug, indexBranch, result.IndexedCommit)
 	}
 
 	ix.outln("")
-
-	return RepoResult{
-		Path:           repoDir,
-		CollectionSlug: slug,
-		DefaultBranch:  defaultBranch,
-		CheckoutOK:     checkoutOK,
-		PullOK:         pullOK,
-		CodexRan:       codexRan,
-		CodexExitCode:  codexExit,
-		Error:          errMsg,
-		DryRun:         dryRun,
-	}
+	return result
 }
 
 func computeCollectionSlug(rootDir, repoDir string) string {
@@ -188,4 +173,81 @@ func (ix *indexer) runCodex(ctx context.Context, repoDir, slug string, dryRun bo
 
 	ix.repoInfof("Codex indexing completed")
 	return true, nil, nil
+}
+
+func (ix *indexer) reportDefaultBranch(ctx context.Context, repoDir string) string {
+	db, err := detectDefaultBranch(ctx, repoDir)
+	if err != nil {
+		ix.repoWarnf("could not detect default branch: %v", err)
+		return ""
+	}
+	if db == "" {
+		ix.repoWarnf("could not detect default branch — skipping checkout/pull")
+		return ""
+	}
+	ix.repoInfof("default branch: %s", db)
+	return db
+}
+
+func (ix *indexer) maybeSynchronizeRepo(ctx context.Context, repoDir, branch string, dryRun bool) (*bool, *bool) {
+	if branch == "" {
+		return nil, nil
+	}
+	if dryRun {
+		ix.repoInfof("[dry-run] git -C %q checkout %s", repoDir, branch)
+		ix.repoInfof("[dry-run] git -C %q pull --ff-only", repoDir)
+		return nil, nil
+	}
+	cOK, pOK := ix.checkoutAndPull(ctx, repoDir, branch)
+	return boolPtr(cOK), boolPtr(pOK)
+}
+
+func (ix *indexer) selectIndexBranch(ctx context.Context, repoDir, defaultBranch string) string {
+	if defaultBranch != "" {
+		return defaultBranch
+	}
+	branch, err := currentBranch(ctx, repoDir)
+	if err != nil {
+		ix.repoWarnf("could not determine current branch: %v", err)
+		return ""
+	}
+	if branch != "" {
+		ix.repoInfof("using current branch: %s", branch)
+	}
+	return branch
+}
+
+func (ix *indexer) detectIndexedCommit(ctx context.Context, repoDir string) string {
+	commit, err := headCommit(ctx, repoDir)
+	if err != nil {
+		ix.repoWarnf("could not determine HEAD commit: %v", err)
+		return ""
+	}
+	return commit
+}
+
+func (ix *indexer) evaluateSkip(slug, branch, commit string) (string, string) {
+	if ix.cache == nil || branch == "" || commit == "" {
+		return "", ""
+	}
+	last, ok := ix.cache.LastCommit(slug, branch)
+	if !ok {
+		return "", ""
+	}
+	if last == commit {
+		msg := fmt.Sprintf("commit %s on %s already indexed", shortCommit(commit), branch)
+		return msg, last
+	}
+	return "", last
+}
+
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+func shortCommit(commit string) string {
+	if len(commit) > shortCommitLen {
+		return commit[:shortCommitLen]
+	}
+	return commit
 }

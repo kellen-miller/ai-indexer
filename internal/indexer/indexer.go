@@ -10,12 +10,14 @@ import (
 type indexer struct {
 	stdout io.Writer
 	stderr io.Writer
+	cache  *commitCache
 }
 
-func newIndexer(stdout, stderr io.Writer) *indexer {
+func newIndexer(stdout, stderr io.Writer, cache *commitCache) *indexer {
 	return &indexer{
 		stdout: stdout,
 		stderr: stderr,
+		cache:  cache,
 	}
 }
 
@@ -40,14 +42,33 @@ type RepoResult struct {
 	CollectionSlug string `json:"collection_slug"`
 	DefaultBranch  string `json:"default_branch,omitempty"`
 	Error          string `json:"error,omitempty"`
+	SkipReason     string `json:"skip_reason,omitempty"`
+	IndexedCommit  string `json:"indexed_commit,omitempty"`
+	CachedCommit   string `json:"cached_commit,omitempty"`
 	CodexRan       bool   `json:"codex_ran"`
 	DryRun         bool   `json:"dry_run"`
 }
 
 // Run executes the indexing workflow for the provided directory.
-func Run(rootDir string, dryRun bool, summaryJSON string) error {
-	ix := newIndexer(os.Stdout, os.Stderr)
-	return ix.run(rootDir, dryRun, summaryJSON)
+func Run(rootDir string, dryRun bool, summaryJSON, cachePath string) error {
+	cache, err := loadCommitCache(cachePath)
+	if err != nil {
+		return err
+	}
+
+	ix := newIndexer(os.Stdout, os.Stderr, cache)
+	err = ix.run(rootDir, dryRun, summaryJSON)
+	saveErr := cache.Save()
+	if err != nil {
+		if saveErr != nil {
+			return fmt.Errorf("%w (cache save failed: %w)", err, saveErr)
+		}
+		return err
+	}
+	if saveErr != nil {
+		return saveErr
+	}
+	return nil
 }
 
 func (ix *indexer) run(rootDir string, dryRun bool, summaryJSON string) error {

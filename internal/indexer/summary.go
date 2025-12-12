@@ -63,6 +63,8 @@ func formatGitStatus(r *RepoResult) string {
 
 func formatCodexStatus(r *RepoResult) string {
 	switch {
+	case r.SkipReason != "":
+		return "skipped"
 	case r.DryRun:
 		return "dry-run"
 	case !r.CodexRan:

@@ -12,11 +12,13 @@ func main() {
 	var (
 		dryRun      bool
 		summaryJSON string
+		cachePath   string
 	)
 
 	flag.BoolVar(&dryRun, "dry-run", false, "Do everything except actually run codex exec.")
 	flag.BoolVar(&dryRun, "n", false, "Alias for --dry-run.")
 	flag.StringVar(&summaryJSON, "summary-json", "codex_index_summary.json", "Path to JSON summary output.")
+	flag.StringVar(&cachePath, "commit-cache", "codex_commit_cache.json", "Path to commit cache file. Set empty to disable caching.")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <root-directory>\n\nFlags:\n", os.Args[0])
 		flag.PrintDefaults()
@@ -35,7 +37,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := indexer.Run(rootDir, dryRun, summaryJSON); err != nil {
+	if err := indexer.Run(rootDir, dryRun, summaryJSON, cachePath); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
