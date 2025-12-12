@@ -142,7 +142,6 @@ func (ix *indexer) runCodex(ctx context.Context, repoDir, slug string, dryRun bo
 	cmd := exec.CommandContext(ctx, "codex", "exec",
 		"--cd", repoDir,
 		"--sandbox", "danger-full-access",
-		"-c", "\"model_reasoning_effort=medium\"",
 		codexPrompt)
 	// Force Codex to read EOF immediately so it doesn't wait for user input
 	// after the first turn, which previously left the indexer hanging.
@@ -154,7 +153,7 @@ func (ix *indexer) runCodex(ctx context.Context, repoDir, slug string, dryRun bo
 	cmd.Stderr = ix.stderr
 
 	if dryRun {
-		ix.repoInfof("[dry-run] COLLECTION_SLUG=%q codex exec --cd %q --sandbox danger-full-access -c \"model_reasoning_effort=medium\" '<PROMPT>'",
+		ix.repoInfof("[dry-run] COLLECTION_SLUG=%q codex exec --cd %q --sandbox danger-full-access '<PROMPT>'",
 			slug,
 			repoDir)
 		return false, nil, nil
