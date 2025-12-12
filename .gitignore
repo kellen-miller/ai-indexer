@@ -390,3 +390,4 @@ go.work.sum
 ### Custom
 scripts/upstreamsync/cache/
 /codex_index_summary.json
+/codex_commit_cache.json
