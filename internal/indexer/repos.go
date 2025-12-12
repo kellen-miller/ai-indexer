@@ -66,6 +66,9 @@ func (ix *indexer) processRepo(ctx context.Context, repoDir, rootDir string, dry
 		result.Error = codexErr.Error()
 	} else if !dryRun && ix.cache != nil && indexBranch != "" && result.IndexedCommit != "" {
 		ix.cache.Update(slug, indexBranch, result.IndexedCommit)
+		if err := ix.persistCache(); err != nil {
+			ix.repoWarnf("commit cache save failed: %v", err)
+		}
 	}
 
 	ix.outln("")

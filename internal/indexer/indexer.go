@@ -33,6 +33,13 @@ func (ix *indexer) errln(args ...any) {
 	}
 }
 
+func (ix *indexer) persistCache() error {
+	if ix.cache == nil {
+		return nil
+	}
+	return ix.cache.Save()
+}
+
 // RepoResult captures per-repo outcome for JSON summary.
 type RepoResult struct {
 	CheckoutOK     *bool  `json:"checkout_ok,omitempty"`
