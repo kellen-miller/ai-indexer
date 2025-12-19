@@ -34,6 +34,7 @@ func main() {
 		noCache      bool
 		skipRepos    stringSliceFlag
 		codexTimeout time.Duration
+		parallel     int
 	)
 
 	flag.BoolVar(&dryRun, "dry-run", false, "Do everything except actually run codex exec.")
@@ -46,6 +47,7 @@ func main() {
 	flag.Var(&skipRepos, "skip-repo", "Path, slug, or name of a repository to skip (repeatable).")
 	flag.DurationVar(&codexTimeout, "codex-timeout", 45*time.Minute,
 		"Maximum duration to allow Codex indexing per repository (0 disables the timeout).")
+	flag.IntVar(&parallel, "parallel", 1, "Number of repositories to index concurrently.")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <root-directory>\n\nFlags:\n", os.Args[0])
 		flag.PrintDefaults()
@@ -70,7 +72,7 @@ func main() {
 		cachePath = defaultCommitCacheFile
 	}
 
-	if err := indexer.Run(rootDir, dryRun, summaryJSON, cachePath, []string(skipRepos), codexTimeout); err != nil {
+	if err := indexer.Run(rootDir, dryRun, summaryJSON, cachePath, []string(skipRepos), codexTimeout, parallel); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

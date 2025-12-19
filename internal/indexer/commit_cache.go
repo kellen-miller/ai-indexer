@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 )
 
 type commitCache struct {
 	data map[string]map[string]string
 	path string
+	mu   sync.RWMutex
 }
 
 func loadCommitCache(path string) (*commitCache, error) {
@@ -43,6 +45,9 @@ func (c *commitCache) Save() error {
 		return nil
 	}
 
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	data, err := json.MarshalIndent(c.data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode commit cache: %w", err)
@@ -65,6 +70,9 @@ func (c *commitCache) LastCommit(repoSlug, branch string) (string, bool) {
 		return "", false
 	}
 
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	branches, ok := c.data[repoSlug]
 	if !ok {
 		return "", false
@@ -78,6 +86,9 @@ func (c *commitCache) Update(repoSlug, branch, commit string) {
 	if c == nil || repoSlug == "" || branch == "" || commit == "" {
 		return
 	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	branches, ok := c.data[repoSlug]
 	if !ok {
