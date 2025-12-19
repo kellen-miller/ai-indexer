@@ -26,3 +26,7 @@ tasks:
   dry-run:
     cmds:
       - "go run ./cmd/cli --dry-run ../."
+
+  index-dev:
+    cmds:
+      - "go run ./cmd/cli ~/development"

@@ -92,13 +92,16 @@ Your job is to persist useful long term knowledge about this repo into Chroma.
    metadata so future agents can filter and search effectively. Use a
    consistent structure such as:
 
+   - All metadata values MUST be scalars (string/int/float/bool/none). Do not
+     use arrays or objects. If you need a list, encode it as a comma-separated
+     string.
    - repo: the repo name (for example: "messagelog", "alloy-compiler").
    - path: a logical path for the summary (for example: "ROOT" for the
      repo overview, or "cmd/server", "internal/foo").
    - kind: one of "repo_overview", "module_summary", "concept".
    - language: primary language for that module if applicable.
    - collection: the exact COLLECTION_SLUG used.
-   - tags: optional list such as ["microservice", "cli", "database", "kafka"].
+   - tags: optional comma-separated string such as "microservice,cli,database,kafka".
 
    Use whatever fields are supported by the Chroma MCP tools, but preserve
    this intent as closely as possible.
