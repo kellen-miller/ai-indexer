@@ -31,7 +31,11 @@ func sanitizePathComponent(value string) string {
 	return out
 }
 
-func (ix *indexer) prepareIndexWorkspace(ctx context.Context, repoDir, slug, branch string, dryRun bool) (string, *bool, *bool, func()) {
+func (ix *indexer) prepareIndexWorkspace(
+	ctx context.Context,
+	repoDir, slug, branch string,
+	dryRun bool,
+) (string, *bool, *bool, func()) {
 	if branch == "" {
 		return repoDir, nil, nil, nil
 	}
@@ -50,7 +54,7 @@ func (ix *indexer) prepareIndexWorkspace(ctx context.Context, repoDir, slug, bra
 	if err := os.RemoveAll(worktreePath); err != nil {
 		ix.repoWarnf("could not clean worktree path %q: %v", worktreePath, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o750); err != nil {
 		ix.repoWarnf("could not prepare worktree parent dir %q: %v", filepath.Dir(worktreePath), err)
 		return repoDir, boolPtr(false), boolPtr(false), nil
 	}
@@ -61,7 +65,18 @@ func (ix *indexer) prepareIndexWorkspace(ctx context.Context, repoDir, slug, bra
 		return repoDir, boolPtr(false), boolPtr(false), nil
 	}
 
-	add := exec.CommandContext(ctx, "git", "-C", repoDir, "worktree", "add", "--force", "--detach", worktreePath, "origin/"+branch)
+	add := exec.CommandContext(
+		ctx,
+		"git",
+		"-C",
+		repoDir,
+		"worktree",
+		"add",
+		"--force",
+		"--detach",
+		worktreePath,
+		"origin/"+branch,
+	)
 	if err := add.Run(); err != nil {
 		ix.repoWarnf("git worktree add for %s failed: %v — using current working tree", branch, err)
 		return repoDir, boolPtr(false), boolPtr(true), nil

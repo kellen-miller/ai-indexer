@@ -9,11 +9,11 @@ tasks:
 
   fmt:
     cmds:
-      - 'golangci-lint fmt --config "$HOME/.config/finxact/microservice-ci-lib/go-lint/.golangci.yaml"'
+      - 'golangci-lint fmt --config "$HOME/.config/weave/.golangci.yaml"'
 
   lint:
     cmds:
-      - 'golangci-lint run --fix --config "$HOME/.config/finxact/microservice-ci-lib/go-lint/.golangci.yaml"'
+      - 'golangci-lint run --fix --config "$HOME/.config/weave/.golangci.yaml"'
 
   test:
     cmds:

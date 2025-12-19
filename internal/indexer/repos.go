@@ -31,7 +31,11 @@ func findGitRepos(root string) ([]string, error) {
 		}
 		return nil
 	})
-	return repos, err
+	if err != nil {
+		return repos, fmt.Errorf("walk repos in %s: %w", root, err)
+	}
+
+	return repos, nil
 }
 
 func (ix *indexer) shouldSkipRepo(rootDir, repoDir, slug string) (bool, string) {
@@ -210,27 +214,12 @@ func detectDefaultBranch(ctx context.Context, repoDir string) (string, error) {
 	return "", nil
 }
 
-func (ix *indexer) checkoutAndPull(ctx context.Context, repoDir, branch string) (bool, bool) {
-	ix.repoInfof("checking out %s", branch)
-	co := exec.CommandContext(ctx, "git", "-C", repoDir, "checkout", branch)
-	if err := co.Run(); err != nil {
-		ix.repoWarnf("git checkout failed — continuing on current branch")
-		return false, false
-	}
-
-	ix.repoInfof("pulling latest changes")
-	pl := exec.CommandContext(ctx, "git", "-C", repoDir, "pull", "--ff-only")
-	if err := pl.Run(); err != nil {
-		ix.repoWarnf("git pull failed — using local state")
-		ok := true
-		return ok, false
-	}
-
-	ix.repoInfof("repository updated to latest")
-	return true, true
-}
-
-func (ix *indexer) runCodex(ctx context.Context, repoDir, slug, baseCommit string, diffFiles []string, dryRun bool) (bool, *int, error) {
+func (ix *indexer) runCodex(
+	ctx context.Context,
+	repoDir, slug, baseCommit string,
+	diffFiles []string,
+	dryRun bool,
+) (bool, *int, error) {
 	cmdCtx := ctx
 	var cancel context.CancelFunc
 	if ix.codexTimeout > 0 {
@@ -256,8 +245,11 @@ func (ix *indexer) runCodex(ctx context.Context, repoDir, slug, baseCommit strin
 	cmd.Stderr = ix.stderr
 
 	if dryRun {
-		desc := fmt.Sprintf("[dry-run] COLLECTION_SLUG=%q codex exec --cd %q --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox '<PROMPT>'",
-			slug, repoDir)
+		desc := fmt.Sprintf(
+			"[dry-run] COLLECTION_SLUG=%q codex exec --cd %q --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox '<PROMPT>'",
+			slug,
+			repoDir,
+		)
 		if baseCommit != "" {
 			desc += fmt.Sprintf(" (incremental from %s)", shortCommit(baseCommit))
 		}
@@ -266,31 +258,38 @@ func (ix *indexer) runCodex(ctx context.Context, repoDir, slug, baseCommit strin
 	}
 
 	feeder := newNewlineFeeder(codexInputKeepAliveInterval)
-	defer feeder.Close()
+	defer func() {
+		if err := feeder.Close(); err != nil {
+			ix.repoWarnf("codex input feeder close failed: %v", err)
+		}
+	}()
 	cmd.Stdin = feeder
 
 	ix.repoInfof("running Codex indexing")
-	if err := cmd.Run(); err != nil {
-		exitCode := 1
-		ee := &exec.ExitError{}
-		if errors.As(err, &ee) {
-			exitCode = ee.ExitCode()
-		}
-		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
-			if ix.codexTimeout > 0 {
-				ix.repoWarnf("Codex timed out after %s", ix.codexTimeout)
-			} else {
-				ix.repoWarnf("Codex timed out (context deadline exceeded)")
-			}
-			timeoutErr := fmt.Errorf("codex exec deadline exceeded: %w", err)
-			return true, &exitCode, timeoutErr
-		}
-		ix.repoWarnf("Codex exited with code %d", exitCode)
-		return true, &exitCode, err
+	err := cmd.Run()
+	if err == nil {
+		ix.repoInfof("Codex indexing completed")
+		return true, nil, nil
 	}
 
-	ix.repoInfof("Codex indexing completed")
-	return true, nil, nil
+	exitCode := 1
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		exitCode = exitErr.ExitCode()
+	}
+
+	if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
+		if ix.codexTimeout > 0 {
+			ix.repoWarnf("Codex timed out after %s", ix.codexTimeout)
+		} else {
+			ix.repoWarnf("Codex timed out (context deadline exceeded)")
+		}
+		timeoutErr := fmt.Errorf("codex exec deadline exceeded: %w", err)
+		return true, &exitCode, timeoutErr
+	}
+
+	ix.repoWarnf("Codex exited with code %d", exitCode)
+	return true, &exitCode, fmt.Errorf("codex exec: %w", err)
 }
 
 func (ix *indexer) reportDefaultBranch(ctx context.Context, repoDir string) string {
@@ -305,19 +304,6 @@ func (ix *indexer) reportDefaultBranch(ctx context.Context, repoDir string) stri
 	}
 	ix.repoInfof("default branch: %s", db)
 	return db
-}
-
-func (ix *indexer) maybeSynchronizeRepo(ctx context.Context, repoDir, branch string, dryRun bool) (*bool, *bool) {
-	if branch == "" {
-		return nil, nil
-	}
-	if dryRun {
-		ix.repoInfof("[dry-run] git -C %q checkout %s", repoDir, branch)
-		ix.repoInfof("[dry-run] git -C %q pull --ff-only", repoDir)
-		return nil, nil
-	}
-	cOK, pOK := ix.checkoutAndPull(ctx, repoDir, branch)
-	return boolPtr(cOK), boolPtr(pOK)
 }
 
 func (ix *indexer) selectIndexBranch(ctx context.Context, repoDir, defaultBranch string) string {
@@ -394,10 +380,10 @@ func diffFilesSince(ctx context.Context, repoDir, baseCommit string) ([]string, 
 }
 
 type newlineFeeder struct {
-	interval time.Duration
-	first    bool
 	done     chan struct{}
+	interval time.Duration
 	once     sync.Once
+	first    bool
 }
 
 func newNewlineFeeder(interval time.Duration) *newlineFeeder {

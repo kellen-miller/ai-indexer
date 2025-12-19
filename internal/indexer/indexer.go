@@ -64,7 +64,13 @@ type RepoResult struct {
 }
 
 // Run executes the indexing workflow for the provided directory.
-func Run(rootDir string, dryRun bool, summaryJSON, cachePath string, skipRepos []string, codexTimeout time.Duration) error {
+func Run(
+	rootDir string,
+	dryRun bool,
+	summaryJSON, cachePath string,
+	skipRepos []string,
+	codexTimeout time.Duration,
+) error {
 	cache, err := loadCommitCache(cachePath)
 	if err != nil {
 		return err
