@@ -4,14 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
-const shortCommitLen = 7
+const (
+	shortCommitLen              = 7
+	codexInputKeepAliveInterval = 30 * time.Second
+)
 
 func findGitRepos(root string) ([]string, error) {
 	var repos []string
@@ -28,6 +34,58 @@ func findGitRepos(root string) ([]string, error) {
 	return repos, err
 }
 
+func (ix *indexer) shouldSkipRepo(rootDir, repoDir, slug string) (bool, string) {
+	if len(ix.skip) == 0 {
+		return false, ""
+	}
+
+	repoAbs := filepath.Clean(repoDir)
+	repoAbsLower := strings.ToLower(repoAbs)
+	repoBaseLower := strings.ToLower(filepath.Base(repoAbs))
+
+	rel, err := filepath.Rel(rootDir, repoAbs)
+	if err != nil {
+		rel = repoAbs
+	}
+	rel = strings.TrimPrefix(rel, "./")
+	rel = filepath.ToSlash(rel)
+	relLower := strings.ToLower(rel)
+
+	slugLower := strings.ToLower(slug)
+
+	for _, raw := range ix.skip {
+		pattern := strings.TrimSpace(raw)
+		if pattern == "" {
+			continue
+		}
+
+		rawLower := strings.ToLower(pattern)
+		if rawLower == slugLower || rawLower == repoBaseLower || rawLower == relLower {
+			return true, fmt.Sprintf("repo excluded via --skip-repo %q", raw)
+		}
+
+		cleaned := filepath.Clean(pattern)
+		cleanLower := strings.ToLower(cleaned)
+		if cleanLower == repoAbsLower {
+			return true, fmt.Sprintf("repo excluded via --skip-repo %q", raw)
+		}
+
+		cleanSlashLower := strings.ToLower(filepath.ToSlash(cleaned))
+		if cleanSlashLower == relLower {
+			return true, fmt.Sprintf("repo excluded via --skip-repo %q", raw)
+		}
+
+		if !filepath.IsAbs(cleaned) {
+			abs := filepath.Join(rootDir, cleaned)
+			if strings.ToLower(filepath.Clean(abs)) == repoAbsLower {
+				return true, fmt.Sprintf("repo excluded via --skip-repo %q", raw)
+			}
+		}
+	}
+
+	return false, ""
+}
+
 func (ix *indexer) processRepo(ctx context.Context, repoDir, rootDir string, dryRun bool) RepoResult {
 	slug := computeCollectionSlug(rootDir, repoDir)
 	ix.repoHeader(repoDir, slug)
@@ -38,17 +96,33 @@ func (ix *indexer) processRepo(ctx context.Context, repoDir, rootDir string, dry
 		DryRun:         dryRun,
 	}
 
+	if skip, reason := ix.shouldSkipRepo(rootDir, repoDir, slug); skip {
+		result.SkipReason = reason
+		ix.repoInfof("skipping indexing: %s", reason)
+		ix.outln("")
+		return result
+	}
+
 	defaultBranch := ix.reportDefaultBranch(ctx, repoDir)
 	result.DefaultBranch = defaultBranch
 
-	result.CheckoutOK, result.PullOK = ix.maybeSynchronizeRepo(ctx, repoDir, defaultBranch, dryRun)
+	indexDir := repoDir
+	idxDir, checkoutOK, pullOK, cleanup := ix.prepareIndexWorkspace(ctx, repoDir, slug, defaultBranch, dryRun)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if idxDir != "" {
+		indexDir = idxDir
+	}
+	result.CheckoutOK = checkoutOK
+	result.PullOK = pullOK
 
-	indexBranch := ix.selectIndexBranch(ctx, repoDir, defaultBranch)
+	indexBranch := ix.selectIndexBranch(ctx, indexDir, defaultBranch)
 	if indexBranch != "" && result.DefaultBranch == "" {
 		result.DefaultBranch = indexBranch
 	}
 
-	result.IndexedCommit = ix.detectIndexedCommit(ctx, repoDir)
+	result.IndexedCommit = ix.detectIndexedCommit(ctx, indexDir)
 	result.SkipReason, result.CachedCommit = ix.evaluateSkip(slug, indexBranch, result.IndexedCommit)
 
 	if result.SkipReason != "" {
@@ -60,7 +134,7 @@ func (ix *indexer) processRepo(ctx context.Context, repoDir, rootDir string, dry
 	var diffFiles []string
 	if result.CachedCommit != "" {
 		result.DiffBaseCommit = result.CachedCommit
-		files, err := diffFilesSince(ctx, repoDir, result.CachedCommit)
+		files, err := diffFilesSince(ctx, indexDir, result.CachedCommit)
 		if err != nil {
 			ix.repoWarnf("could not compute diff vs %s: %v — falling back to full indexing",
 				shortCommit(result.CachedCommit), err)
@@ -72,7 +146,7 @@ func (ix *indexer) processRepo(ctx context.Context, repoDir, rootDir string, dry
 		}
 	}
 
-	ran, exitCode, codexErr := ix.runCodex(ctx, repoDir, slug, result.CachedCommit, diffFiles, dryRun)
+	ran, exitCode, codexErr := ix.runCodex(ctx, indexDir, slug, result.CachedCommit, diffFiles, dryRun)
 	result.CodexRan = ran
 	if exitCode != nil {
 		result.CodexExitCode = exitCode
@@ -157,14 +231,18 @@ func (ix *indexer) checkoutAndPull(ctx context.Context, repoDir, branch string) 
 }
 
 func (ix *indexer) runCodex(ctx context.Context, repoDir, slug, baseCommit string, diffFiles []string, dryRun bool) (bool, *int, error) {
-	cmd := exec.CommandContext(ctx, "codex", "exec",
+	cmdCtx := ctx
+	var cancel context.CancelFunc
+	if ix.codexTimeout > 0 {
+		cmdCtx, cancel = context.WithTimeout(ctx, ix.codexTimeout)
+		defer cancel()
+	}
+
+	cmd := exec.CommandContext(cmdCtx, "codex", "exec",
 		"--cd", repoDir,
 		"--sandbox", "danger-full-access",
 		"--dangerously-bypass-approvals-and-sandbox",
 		codexPrompt)
-	// Force Codex to read EOF immediately so it doesn't wait for user input
-	// after the first turn, which previously left the indexer hanging.
-	cmd.Stdin = strings.NewReader("")
 	env := os.Environ()
 	env = append(env, "COLLECTION_SLUG="+slug)
 	if baseCommit != "" {
@@ -187,12 +265,25 @@ func (ix *indexer) runCodex(ctx context.Context, repoDir, slug, baseCommit strin
 		return false, nil, nil
 	}
 
+	feeder := newNewlineFeeder(codexInputKeepAliveInterval)
+	defer feeder.Close()
+	cmd.Stdin = feeder
+
 	ix.repoInfof("running Codex indexing")
 	if err := cmd.Run(); err != nil {
 		exitCode := 1
 		ee := &exec.ExitError{}
 		if errors.As(err, &ee) {
 			exitCode = ee.ExitCode()
+		}
+		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
+			if ix.codexTimeout > 0 {
+				ix.repoWarnf("Codex timed out after %s", ix.codexTimeout)
+			} else {
+				ix.repoWarnf("Codex timed out (context deadline exceeded)")
+			}
+			timeoutErr := fmt.Errorf("codex exec deadline exceeded: %w", err)
+			return true, &exitCode, timeoutErr
 		}
 		ix.repoWarnf("Codex exited with code %d", exitCode)
 		return true, &exitCode, err
@@ -300,4 +391,53 @@ func diffFilesSince(ctx context.Context, repoDir, baseCommit string) ([]string, 
 		files = append(files, line)
 	}
 	return files, nil
+}
+
+type newlineFeeder struct {
+	interval time.Duration
+	first    bool
+	done     chan struct{}
+	once     sync.Once
+}
+
+func newNewlineFeeder(interval time.Duration) *newlineFeeder {
+	return &newlineFeeder{
+		interval: interval,
+		first:    true,
+		done:     make(chan struct{}),
+	}
+}
+
+func (nf *newlineFeeder) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	if !nf.first {
+		timer := time.NewTimer(nf.interval)
+		defer timer.Stop()
+		select {
+		case <-nf.done:
+			return 0, io.EOF
+		case <-timer.C:
+		}
+	} else {
+		nf.first = false
+	}
+
+	select {
+	case <-nf.done:
+		return 0, io.EOF
+	default:
+	}
+
+	p[0] = '\n'
+	return 1, nil
+}
+
+func (nf *newlineFeeder) Close() error {
+	nf.once.Do(func() {
+		close(nf.done)
+	})
+	return nil
 }

@@ -5,18 +5,35 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"ai-index/internal/indexer"
 )
+
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string {
+	return fmt.Sprint([]string(*s))
+}
+
+func (s *stringSliceFlag) Set(value string) error {
+	if value == "" {
+		return nil
+	}
+	*s = append(*s, value)
+	return nil
+}
 
 const defaultCommitCacheFile = "codex_commit_cache.json"
 
 func main() {
 	var (
-		dryRun      bool
-		summaryJSON string
-		cachePath   string
-		noCache     bool
+		dryRun       bool
+		summaryJSON  string
+		cachePath    string
+		noCache      bool
+		skipRepos    stringSliceFlag
+		codexTimeout time.Duration
 	)
 
 	flag.BoolVar(&dryRun, "dry-run", false, "Do everything except actually run codex exec.")
@@ -26,6 +43,9 @@ func main() {
 		fmt.Sprintf("Path to commit cache file (default %s). Use --no-commit-cache to disable.",
 			defaultCommitCacheFile))
 	flag.BoolVar(&noCache, "no-commit-cache", false, "Disable commit cache.")
+	flag.Var(&skipRepos, "skip-repo", "Path, slug, or name of a repository to skip (repeatable).")
+	flag.DurationVar(&codexTimeout, "codex-timeout", 45*time.Minute,
+		"Maximum duration to allow Codex indexing per repository (0 disables the timeout).")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags] <root-directory>\n\nFlags:\n", os.Args[0])
 		flag.PrintDefaults()
@@ -50,7 +70,7 @@ func main() {
 		cachePath = defaultCommitCacheFile
 	}
 
-	if err := indexer.Run(rootDir, dryRun, summaryJSON, cachePath); err != nil {
+	if err := indexer.Run(rootDir, dryRun, summaryJSON, cachePath, []string(skipRepos), codexTimeout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

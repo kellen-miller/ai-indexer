@@ -5,19 +5,24 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 )
 
 type indexer struct {
-	stdout io.Writer
-	stderr io.Writer
-	cache  *commitCache
+	stdout       io.Writer
+	stderr       io.Writer
+	cache        *commitCache
+	skip         []string
+	codexTimeout time.Duration
 }
 
-func newIndexer(stdout, stderr io.Writer, cache *commitCache) *indexer {
+func newIndexer(stdout, stderr io.Writer, cache *commitCache, skip []string, codexTimeout time.Duration) *indexer {
 	return &indexer{
-		stdout: stdout,
-		stderr: stderr,
-		cache:  cache,
+		stdout:       stdout,
+		stderr:       stderr,
+		cache:        cache,
+		skip:         skip,
+		codexTimeout: codexTimeout,
 	}
 }
 
@@ -59,13 +64,13 @@ type RepoResult struct {
 }
 
 // Run executes the indexing workflow for the provided directory.
-func Run(rootDir string, dryRun bool, summaryJSON, cachePath string) error {
+func Run(rootDir string, dryRun bool, summaryJSON, cachePath string, skipRepos []string, codexTimeout time.Duration) error {
 	cache, err := loadCommitCache(cachePath)
 	if err != nil {
 		return err
 	}
 
-	ix := newIndexer(os.Stdout, os.Stderr, cache)
+	ix := newIndexer(os.Stdout, os.Stderr, cache, skipRepos, codexTimeout)
 	err = ix.run(rootDir, dryRun, summaryJSON)
 	saveErr := cache.Save()
 	if err != nil {
